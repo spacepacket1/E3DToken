@@ -1,0 +1,23 @@
+{
+  "name": "wormhole-e3d-solana",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "@wormhole-foundation/sdk": "^1.13.1",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "scripts": {
+    "check": "tsx src/check-wrapped-e3d.ts",
+    "attest": "tsx src/attest-e3d.ts",
+    "transfer": "tsx src/transfer-e3d-to-solana.ts",
+    "redeem": "tsx src/redeem-on-solana.ts",
+    "balances": "tsx src/check-balances.ts"
+  }
+}
