@@ -9,11 +9,17 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/interfaces/IERC2981.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
 import "./AgentIdentityLib.sol";
+
+interface IERC20Burnable {
+    function burnFrom(address account, uint256 amount) external;
+}
 
 contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable, IERC2981 {
     using SafeERC20 for IERC20;
     using AgentIdentityLib for AgentIdentityLib.AgentIdentity;
+    using Strings for uint256;
 
     error RateMustBePositive();
     error NotEnoughE3DTokens();
@@ -41,6 +47,8 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
     error InsufficientE3DForActivation();
     error InvalidLevel();
     error InvalidFee();
+    error NotScorer();
+    error AgentNotTransferable();
 
     uint256 private royaltyPercentage;
     uint256 private nextTokenId;
@@ -94,6 +102,11 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
     mapping(address => uint256) public tokenToAgentNFT;  // token address => NFT ID
     uint256 public agentActivationFee;  // Fee in E3D to activate an agent (default 100 E3D)
 
+    // ===== Upgrade: resolver, scorer role, controlled handoff (append-only storage) =====
+    string public agentBaseURI;          // dynamic tokenURI base for agent tokens
+    address public reputationScorer;     // low-privilege key allowed to write reputation/activity
+    bool private _agentHandoffUnlocked;  // transient guard allowing deliberate agent transfers
+
     event NFTMinted(uint256 indexed tokenId, address indexed creator, string metadataURI);
     event AgentIdentityMinted(uint256 indexed tokenId, address indexed tokenAddress, address indexed activator, string registrationURI);
     event AgentReputationUpdated(uint256 indexed tokenId, uint256 newScore);
@@ -117,6 +130,9 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
     event MintFeeChangeProposed(uint256 proposalId, address proposer, uint256 newFee);
     event MintFeeUpdated(uint256 newFee);
     event E3DPerETHUpdated(uint256 newRate);
+    event AgentBaseURIUpdated(string newBaseURI);
+    event ReputationScorerUpdated(address indexed scorer);
+    event AgentHandedOff(uint256 indexed tokenId, address indexed from, address indexed to);
     
     // Subscription related events
     event SubscriptionPurchased(address subscriber, SubscriptionTier tier, bool paidWithE3D, uint256 expiryTime);
@@ -520,6 +536,11 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
         _;
     }
 
+    modifier onlyScorerOrOwner() {
+        if (msg.sender != reputationScorer && msg.sender != owner()) revert NotScorer();
+        _;
+    }
+
     function mintAgentIdentity(
         address tokenAddress,
         string calldata registrationURI
@@ -531,7 +552,7 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
         // Burn activation fee in E3D (creates scarcity)
         if (e3dToken.balanceOf(msg.sender) < agentActivationFee) revert InsufficientE3DForActivation();
         if (e3dToken.allowance(msg.sender, address(this)) < agentActivationFee) revert ApproveE3DTokensFirst();
-        if (!e3dToken.transferFrom(msg.sender, address(this), agentActivationFee)) revert TransferFailed();
+        IERC20Burnable(address(e3dToken)).burnFrom(msg.sender, agentActivationFee);
 
         uint256 tokenId = nextTokenId++;
         _safeMint(msg.sender, tokenId);
@@ -556,12 +577,12 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
         return tokenId;
     }
 
-    function updateAgentReputation(uint256 tokenId, uint256 newScore) external onlyOwner agentExists(tokenId) {
+    function updateAgentReputation(uint256 tokenId, uint256 newScore) external onlyScorerOrOwner agentExists(tokenId) {
         agentIdentities[tokenId].updateReputation(newScore);
         emit AgentReputationUpdated(tokenId, newScore);
     }
 
-    function recordAgentFunding(uint256 tokenId, uint256 amount) external onlyOwner agentExists(tokenId) {
+    function recordAgentFunding(uint256 tokenId, uint256 amount) external onlyScorerOrOwner agentExists(tokenId) {
         agentIdentities[tokenId].recordFunding(amount);
         emit AgentFundingRecorded(tokenId, amount, agentIdentities[tokenId].totalFundingE3D);
     }
@@ -572,7 +593,7 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
         emit AgentValidationUpdated(tokenId, level);
     }
 
-    function recordAgentActivity(uint256 tokenId) external onlyOwner agentExists(tokenId) {
+    function recordAgentActivity(uint256 tokenId) external onlyScorerOrOwner agentExists(tokenId) {
         agentIdentities[tokenId].recordActivity();
         emit AgentActivityRecorded(tokenId, block.timestamp);
     }
@@ -615,5 +636,73 @@ contract E3DNFTManager is Initializable, ERC721URIStorageUpgradeable, OwnableUpg
             (block.timestamp - agent.activatedTimestamp) / 1 days,
             agent.lastActivityTimestamp > 0 ? (block.timestamp - agent.lastActivityTimestamp) / 1 days : 0
         );
+    }
+
+    // ===== Upgrade: resolver, scorer, handoff, access tiering =====
+
+    /// @notice Set the base URI agent tokens resolve to (e.g. https://maps.e3d.ai/agents/).
+    function setAgentBaseURI(string calldata newBaseURI) external onlyOwner {
+        agentBaseURI = newBaseURI;
+        emit AgentBaseURIUpdated(newBaseURI);
+    }
+
+    /// @notice Set the low-privilege key allowed to write reputation/activity/funding.
+    function setReputationScorer(address scorer) external onlyOwner {
+        reputationScorer = scorer;
+        emit ReputationScorerUpdated(scorer);
+    }
+
+    /// @notice Deliberate handoff of an agent identity NFT by its current holder.
+    /// Ordinary transfers and marketplace sales of agent tokens are blocked.
+    function handoffAgent(uint256 tokenId, address to) external agentExists(tokenId) {
+        if (ownerOf(tokenId) != msg.sender) revert NotOwner();
+        if (to == address(0)) revert InvalidTokenAddress();
+        _agentHandoffUnlocked = true;
+        _transfer(msg.sender, to, tokenId);
+        _agentHandoffUnlocked = false;
+        emit AgentHandedOff(tokenId, msg.sender, to);
+    }
+
+    /// @notice Access tier for off-chain x402 pricing (0 = base ... 3 = top).
+    function getAgentTier(uint256 tokenId) external view agentExists(tokenId) returns (uint8) {
+        AgentIdentityLib.AgentIdentity storage a = agentIdentities[tokenId];
+        if (!a.isActive) return 0;
+        if (a.validationLevel >= 2 && a.reputationScore >= 8000) return 3;
+        if (a.validationLevel >= 1 && a.reputationScore >= 6500) return 2;
+        if (a.reputationScore >= 5000) return 1;
+        return 0;
+    }
+
+    // ----- overrides -----
+
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        override(ERC721URIStorageUpgradeable)
+        returns (string memory)
+    {
+        if (agentIdentities[tokenId].tokenAddress != address(0) && bytes(agentBaseURI).length != 0) {
+            return string.concat(agentBaseURI, tokenId.toString());
+        }
+        return super.tokenURI(tokenId);
+    }
+
+    function _update(address to, uint256 tokenId, address auth)
+        internal
+        override(ERC721Upgradeable)
+        returns (address)
+    {
+        address from = super._update(to, tokenId, auth);
+        // Allow mint (from == 0) and burn (to == 0); block ordinary transfers of agent
+        // identity tokens unless routed through handoffAgent().
+        if (
+            from != address(0) &&
+            to != address(0) &&
+            agentIdentities[tokenId].tokenAddress != address(0) &&
+            !_agentHandoffUnlocked
+        ) {
+            revert AgentNotTransferable();
+        }
+        return from;
     }
 }
