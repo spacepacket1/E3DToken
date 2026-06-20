@@ -1,0 +1,7 @@
+node_modules/
+.env
+cache/
+artifacts/
+.DS_Store
+
+# Keep .openzeppelin/ tracked — it holds the proxy upgrade manifest
