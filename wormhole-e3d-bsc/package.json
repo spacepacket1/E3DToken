@@ -1,0 +1,22 @@
+{
+  "name": "wormhole-e3d-bsc",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@wormhole-foundation/sdk": "^1.13.1",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "scripts": {
+    "attest":        "tsx src/attest.ts",
+    "transfer":      "tsx src/transfer.ts",
+    "redeem":        "tsx src/redeem.ts",
+    "check":         "tsx src/check.ts",
+    "add-liquidity": "tsx src/add-liquidity.ts"
+  }
+}
