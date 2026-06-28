@@ -34,7 +34,7 @@ const FACTORY_ABI = [
   "function getPair(address tokenA, address tokenB) view returns (address pair)",
 ] as const;
 
-const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095b";
+const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
 
 async function main(): Promise<void> {
   if (!config.wrappedE3dBscAddress) {
