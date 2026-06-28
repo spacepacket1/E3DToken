@@ -17,6 +17,7 @@
     "transfer":      "tsx src/transfer.ts",
     "redeem":        "tsx src/redeem.ts",
     "check":         "tsx src/check.ts",
+    "calc-ratio":    "tsx src/calc-ratio.ts",
     "add-liquidity": "tsx src/add-liquidity.ts"
   }
 }
