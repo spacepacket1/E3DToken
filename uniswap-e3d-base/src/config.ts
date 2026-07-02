@@ -20,7 +20,7 @@ export const config = {
 
   // Uniswap v3 on Base (mainnet)
   factoryAddress: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
-  positionManagerAddress: "0x03a520b32c04BF3BeEF7beB72E919cF822ed34F2",
+  positionManagerAddress: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
 
   feeTier: 3000, // 0.3%
   tickSpacing: 60,
